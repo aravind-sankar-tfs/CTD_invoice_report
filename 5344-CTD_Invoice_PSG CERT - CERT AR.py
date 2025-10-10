@@ -1,9 +1,23 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC - ### Pull the data from MDP
-# MAGIC - ### Apply transformations
-# MAGIC - ### Load the data into S3
 # MAGIC
+# MAGIC ## Overview
+# MAGIC
+# MAGIC This notebook aims to:
+# MAGIC - Pull data from the MDP database instead of CODA.
+# MAGIC - Replicate the logic of the CERT AR Query SQL (which feeds into AR CODA Grouped) using Python.
+# MAGIC - Save the resulting dataset to S3 as `psg_ctd_cert_ar`.
+# MAGIC
+# MAGIC ## Steps to Achieve
+# MAGIC
+# MAGIC 1. **Connect to MDP and Extract Data:** Establish a connection to the MDP data source and retrieve the required data using Python.
+# MAGIC 2. **Transform Data:** Apply necessary transformations to replicate the SQL output.
+# MAGIC 3. **Save to S3:** Write the final dataset to S3 with the specified name.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC #### Import Libraries
 
 # COMMAND ----------
 
@@ -13,11 +27,11 @@ from pyspark.sql import functions as F
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ####Load data from MDP
+# MAGIC ####1.Connect to MDP and Extract Data
 
 # COMMAND ----------
 
-# DBTITLE 1,Creating Dfs
+# DBTITLE 1,Creating dataframes
 oas_docline_df = (
     spark.read.format("delta")
     .load("s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_docline")
@@ -47,10 +61,11 @@ oas_el3_element_df = spark.read.format("delta").load("s3://psg-mydata-production
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ####Transformations
+# MAGIC ####2.Transform Data
 
 # COMMAND ----------
 
+# DBTITLE 1,Creating aggregated df from oas_docline
 aggregated_df = (
     oas_docline_df
       .filter(F.col("el2").startswith("021"))
@@ -81,6 +96,7 @@ aggregated_df = (
 
 # COMMAND ----------
 
+# DBTITLE 1,Creating aggregated df2 from oas_docline
 aggregated_df2 = (
     oas_docline_df.filter((~F.col("el2").like("021%")) & (F.col("el4") != ""))
       .groupBy("cmpcode", "doccode", "docnum")
@@ -89,25 +105,7 @@ aggregated_df2 = (
 
 # COMMAND ----------
 
-#display(aggregated_df)
-#display(aggregated_df2)
-
-# COMMAND ----------
-
-siteid_map = {
-    'ALLENTOWN': '0', 'BAS': '1', 'MAI': '2', 'MP': '4', 'WAR': '13', 'CLINTRAK': '99',
-    'INDY': '20', 'KOREA': '33', 'JAPAN': '15', 'SINGAPORE': '3', 'CHINA': '7',
-    'SUZHOU': '31', 'HEG': '38'
-}
-
-def siteid_expr(col):
-    return F.coalesce(
-        F.create_map([F.lit(x) for x in sum(siteid_map.items(), ())])[col],
-        F.lit("Unknown")
-    )
-
-# COMMAND ----------
-
+# DBTITLE 1,Joining aggregated data with company and element data
 final_df = (
     oas_dochead_df.alias("DH")
     .join(
@@ -152,7 +150,21 @@ final_df = (
         ))
     )
     .select(
-        siteid_expr(F.col("DH.cmpcode")).alias("SiteID"),
+        F.when(F.col("DH.cmpcode") == "ALLENTOWN", F.lit("0"))
+         .when(F.col("DH.cmpcode") == "BAS", F.lit("1"))
+         .when(F.col("DH.cmpcode") == "MAI", F.lit("2"))
+         .when(F.col("DH.cmpcode") == "MP", F.lit("4"))
+         .when(F.col("DH.cmpcode") == "WAR", F.lit("13"))
+         .when(F.col("DH.cmpcode") == "CLINTRAK", F.lit("99"))
+         .when(F.col("DH.cmpcode") == "INDY", F.lit("20"))
+         .when(F.col("DH.cmpcode") == "KOREA", F.lit("33"))
+         .when(F.col("DH.cmpcode") == "JAPAN", F.lit("15"))
+         .when(F.col("DH.cmpcode") == "SINGAPORE", F.lit("3"))
+         .when(F.col("DH.cmpcode") == "CHINA", F.lit("7"))
+         .when(F.col("DH.cmpcode") == "SUZHOU", F.lit("31"))
+         .when(F.col("DH.cmpcode") == "HEG", F.lit("38"))
+         .otherwise(F.lit("Unknown"))
+         .alias("SiteID"),
         F.col("DH.cmpcode"),
         F.col("DH.doccode"),
         F.col("DH.docdate").alias("InvoiceDate"),
@@ -205,22 +217,41 @@ final_df = (
          .otherwise(F.lit("3PD-OWN"))
          .alias("InvoiceType"),
         F.upper(
-            F.col("DH.cmpcode") +
-            F.when((F.col("DH.cmpcode") == "BAS") & (F.col("DL.ref5").like("PT%")), F.substring(F.col("DL.ref5"), 1, 6))
-             .when((F.col("DH.cmpcode") == "BAS") & (~F.col("DL.ref5").like("PT%")), F.col("DH.cmpcode"))
-             .when((F.col("DH.cmpcode") == "WAR") & (F.col("DL.ref5").like("PT%")), F.substring(F.col("DL.ref5"), 1, 6))
-             .when((F.col("DH.cmpcode") == "WAR") & (~F.col("DL.ref5").like("PT%")), F.col("DH.cmpcode"))
-             .when((F.col("DH.cmpcode") == "ALLENTOWN") & (F.col("DL2.el4").like("X%")), F.col("DL2.el4"))
-             .when((F.col("DH.cmpcode") == "ALLENTOWN") & (~F.col("DL2.el4").like("X%")), F.col("DH.cmpcode"))
-             .when((F.col("DH.cmpcode") == "MP") & (F.col("DL2.el4").like("X%")), F.col("DL2.el4"))
-             .when((F.col("DH.cmpcode") == "MP") & (~F.col("DL2.el4").like("X%")), F.col("DH.cmpcode"))
-             .when((F.col("DH.cmpcode") == "CLINTRAK") & (F.col("DL2.el4").like("X%")), F.col("DL2.el4"))
-             .when((F.col("DH.cmpcode") == "CLINTRAK") & (~F.col("DL2.el4").like("X%")), F.col("DH.cmpcode"))
-             .when((F.col("DH.cmpcode") == "MAI") & (F.col("DL.ref3").like("PT%")), F.substring(F.col("DL.ref3"), 1, 6))
-             .when((F.col("DH.cmpcode") == "MAI") & (~F.col("DL.ref3").like("PT%")), F.col("DH.cmpcode"))
-             .otherwise("Unknown")
+            F.concat(
+                F.col("DH.cmpcode"),
+                F.when((F.col("DH.cmpcode") == "BAS") & (F.col("DL.ref5").like("PT%")), F.substring(F.col("DL.ref5"), 1, 6))
+                 .when((F.col("DH.cmpcode") == "BAS") & (~F.col("DL.ref5").like("PT%")), F.col("DH.cmpcode"))
+                 .when((F.col("DH.cmpcode") == "WAR") & (F.col("DL.ref5").like("PT%")), F.substring(F.col("DL.ref5"), 1, 6))
+                 .when((F.col("DH.cmpcode") == "WAR") & (~F.col("DL.ref5").like("PT%")), F.col("DH.cmpcode"))
+                 .when((F.col("DH.cmpcode") == "ALLENTOWN") & (F.col("DL2.el4").like("X%")), F.col("DL2.el4"))
+                 .when((F.col("DH.cmpcode") == "ALLENTOWN") & (~F.col("DL2.el4").like("X%")), F.col("DH.cmpcode"))
+                 .when((F.col("DH.cmpcode") == "MP") & (F.col("DL2.el4").like("X%")), F.col("DL2.el4"))
+                 .when((F.col("DH.cmpcode") == "MP") & (~F.col("DL2.el4").like("X%")), F.col("DH.cmpcode"))
+                 .when((F.col("DH.cmpcode") == "CLINTRAK") & (F.col("DL2.el4").like("X%")), F.col("DL2.el4"))
+                 .when((F.col("DH.cmpcode") == "CLINTRAK") & (~F.col("DL2.el4").like("X%")), F.col("DH.cmpcode"))
+                 .when((F.col("DH.cmpcode") == "MAI") & (F.col("DL.ref3").like("PT%")), F.substring(F.col("DL.ref3"), 1, 6))
+                 .when((F.col("DH.cmpcode") == "MAI") & (~F.col("DL.ref3").like("PT%")), F.col("DH.cmpcode"))
+                 .otherwise("Unknown")
+            )
         ).alias("ICEntityMapKey"),
-        (siteid_expr(F.col("DH.cmpcode")) + F.lit("-") + F.col("DL.el3")).alias("_keyClientID"),
+        F.concat(
+            F.when(F.col("DH.cmpcode") == "ALLENTOWN", F.lit("0"))
+             .when(F.col("DH.cmpcode") == "BAS", F.lit("1"))
+             .when(F.col("DH.cmpcode") == "MAI", F.lit("2"))
+             .when(F.col("DH.cmpcode") == "MP", F.lit("4"))
+             .when(F.col("DH.cmpcode") == "WAR", F.lit("13"))
+             .when(F.col("DH.cmpcode") == "CLINTRAK", F.lit("99"))
+             .when(F.col("DH.cmpcode") == "INDY", F.lit("20"))
+             .when(F.col("DH.cmpcode") == "KOREA", F.lit("33"))
+             .when(F.col("DH.cmpcode") == "JAPAN", F.lit("15"))
+             .when(F.col("DH.cmpcode") == "SINGAPORE", F.lit("3"))
+             .when(F.col("DH.cmpcode") == "CHINA", F.lit("7"))
+             .when(F.col("DH.cmpcode") == "SUZHOU", F.lit("31"))
+             .when(F.col("DH.cmpcode") == "HEG", F.lit("38"))
+             .otherwise(F.lit("Unknown")),
+            F.lit("-"),
+            F.col("DL.el3")
+        ).alias("_keyClientID"),
         F.col("DL.el3").alias("CustomerNumber"),
         F.col("ELE.el3_name").alias("CustomerName"),
         F.when(F.col("DH.cmpcode") == "CHINA", F.col("DL.ref2"))
@@ -231,8 +262,8 @@ final_df = (
         F.when((F.col("DH.cmpcode") == "BAS") & (F.col("DL.ref5").like("PT%")), F.col("DL.ref3"))
          .otherwise(F.coalesce(F.col("DL2.el4"), F.lit(""))).alias("JobNumber"),
         F.col("DL.statpay"),
-        F.col("DL.valuehome"),
-        F.col("DL.valuedoc")
+        F.format_number(F.col("DL.valuehome"), 2).alias("valuehome"),
+        F.format_number(F.col("DL.valuedoc"), 2).alias("valuedoc")
     )
     .filter(
         (~F.upper(F.coalesce(F.col("ServiceDeliverySiteInvoiceNumber"), F.lit("[]"))).like("%REIMB%")) &
@@ -242,12 +273,13 @@ final_df = (
 
 # COMMAND ----------
 
+# DBTITLE 1,Remove duplicates
 final_df_dedup=final_df.dropDuplicates()
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Load final data into S3
+# MAGIC ####3.Save to S3- Load final data
 
 # COMMAND ----------
 
@@ -260,16 +292,16 @@ final_df_dedup.write \
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ###Validations
+# MAGIC #### Final Code Validation
 
 # COMMAND ----------
 
-# # Validation Checks: 1.schema 2.data 3.duplicates
-# #final_df.printSchema()
-# #display(final_df)
+#Validation Checks: 1.schema 2.data 3.duplicates 4.count 5.data in s3
+#final_df_dedup.printSchema()
+#display(final_df_dedup)
 
-# #print(final_df.count())  --1305270
-# #print(final_df_dedup.count()) --1305193
+#print(final_df.count())  #1305270
+#print(final_df_dedup.count()) #1305193
 
 # #Find duplicates
 # final_df.createOrReplaceTempView("final_df_view")
@@ -285,7 +317,7 @@ final_df_dedup.write \
 # duplicate_records_df = spark.sql(query)
 # display(duplicate_records_df)
 
-#Validate data in S3
-#df = spark.read.format("delta").load("s3://tfsdl-corp-fdt/test/psg/ctd/cert/psg_ctd_cert_ar")
-#df.count()
-#display(df)
+# Validate data in S3
+# df = spark.read.format("delta").load("s3://tfsdl-corp-fdt/test/psg/ctd/cert/psg_ctd_cert_ar")
+# df.count()
+# display(df)
