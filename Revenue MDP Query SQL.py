@@ -13,6 +13,7 @@ def convert_decimal_value(value_col, dp_col):
     """
     return F.when(F.col(dp_col) == 0, F.col(value_col)) \
             .otherwise(F.col(value_col) / F.pow(F.lit(10), F.col(dp_col) - 2))
+            
 
 # COMMAND ----------
 
