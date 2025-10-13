@@ -24,10 +24,10 @@ def process_psg_cert_revenue():
         dochead = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_dochead"
         doc_oas_company = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_company"
         docline = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_docline"
-        ele1 = "s3://tfsdl-lslpg-fdt-test/psg_ctd_el1"
+        # ele1 = "s3://tfsdl-lslpg-fdt-test/psg_ctd_el1"
         ele2 = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el2_element"
         ele3 = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el3_element"
-        ele4 = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el4_element"
+        # ele4 = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el4_element"
         
         # Load data
         DH = spark.read.format("delta").load(dochead)
@@ -35,8 +35,8 @@ def process_psg_cert_revenue():
         C = spark.read.format("delta").load(doc_oas_company)
         E2 = spark.read.format("delta").load(ele2)
         E3 = spark.read.format("delta").load(ele3)
-        E4 = spark.read.format("delta").load(ele4)
-        E1 = spark.read.format("csv").option("header", True).option("inferSchema", True).load(ele1)
+        # E4 = spark.read.format("delta").load(ele4)
+        # E1 = spark.read.format("csv").option("header", True).option("inferSchema", True).load(ele1)
         
         #1 ARLines: Get customer-related lines with el3
       
@@ -230,7 +230,7 @@ def process_psg_cert_revenue():
         )
                 
         # Final SELECT with SiteID mapping and JobNumber default
-        revnue_mpd = agg.alias("agg").join(
+        revnue_mdp = agg.alias("agg").join(
             job_defaults.alias("jd"),
             F.col("agg.cmpcode") == F.col("jd.cmpcode"),
             "left"
@@ -280,7 +280,7 @@ def process_psg_cert_revenue():
             F.col("agg.el2_name").alias("name")
         )    
              
-        return revnue_mpd
+        return revnue_mdp
         
     except Exception as e:
         error_msg = f"Error in process_psg_cert_revenue: {str(e)}"
@@ -291,10 +291,10 @@ def process_psg_cert_revenue():
 
 if __name__ == "__main__":
     try:
-        df_revnue_mpd = process_psg_cert_revenue()
+        df_revnue_mdp = process_psg_cert_revenue()
         output_path = "s3://tfsdl-corp-fdt/test/psg/ctd/cert/revenue_mdp"
         try:
-            df_revnue_mpd.write.mode("overwrite").format("delta").save(output_path)
+            df_revnue_mdp.write.mode("overwrite").format("delta").save(output_path)
         except Exception as write_err:
             raise Exception(f"Failed to write revenue_mdp to {output_path}: {str(write_err)}")
     except Exception as e:
