@@ -1,23 +1,41 @@
 # Databricks notebook source
 # MAGIC %md
+# MAGIC # Overview
 # MAGIC
-# MAGIC ## Overview
+# MAGIC This process transforms and summarizes invoice and document line data to create a comprehensive, business-ready dataset.  
+# MAGIC It combines detailed transaction records with company and element information, applies business rules, and calculates key financial and operational metrics.
 # MAGIC
-# MAGIC This notebook aims to:
-# MAGIC - Pull data from the MDP database instead of CODA.
-# MAGIC - Replicate the logic of the CERT AR Query SQL (which feeds into AR CODA Grouped) using Python.
-# MAGIC - Save the resulting dataset to S3 as `psg_ctd_cert_ar`.
+# MAGIC ---
 # MAGIC
-# MAGIC ## Steps to Achieve
+# MAGIC ## Data Sources
 # MAGIC
-# MAGIC 1. **Connect to MDP and Extract Data:** Establish a connection to the MDP data source and retrieve the required data using Python.
-# MAGIC 2. **Transform Data:** Apply necessary transformations to replicate the SQL output.
-# MAGIC 3. **Save to S3:** Write the final dataset to S3 with the specified name.
+# MAGIC - **Document Lines** (`psg_mydata_production_euw1_raw_erp.coda_oas_docline`): Contains individual transaction details for each invoice.
+# MAGIC - **Document Headers** (`psg_mydata_production_euw1_raw_erp.coda_oas_dochead`): Contains summary information for each invoice.
+# MAGIC - **Company Reference** (`psg_mydata_production_euw1_raw_erp.coda_oas_company`): Provides company details and mappings.
+# MAGIC - **Element Reference** (`psg_mydata_production_euw1_raw_erp.coda_oas_el3_element`): Provides element information.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## Step-by-Step Business Explanation
+# MAGIC
+# MAGIC - **Step 1:** Aggregate revenue document lines (`el2` like '021%') per invoice, summing `valuedoc`/`valuehome` and capturing key reference fields.  
+# MAGIC - **Step 2:** Pull auxiliary attributes (`el4`) from non‑revenue document lines, join both aggregates to document headers and enrich with company/element lookups.  
+# MAGIC - **Step 3:** Apply business rules to derive SiteID, InvoiceNumber, ServiceDeliverySite, filter out excluded statuses/codes, and output the final reporting dataset.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## Summary
+# MAGIC
+# MAGIC - **AggregatedDL:** Summarizes financial transaction lines for invoices from `coda_oas_docline` where `el2` starts with '021'.
+# MAGIC - **AggregatedDL2:** Extracts additional attributes (e.g., service delivery site) from `coda_oas_docline` where `el2` does not start with '021'.
+# MAGIC - **FinalAggregated:** Combines header, line, company, and element data, applies business rules, and produces the final reporting dataset.
+# MAGIC - **All tables reference:** `psg_mydata_production_euw1_raw_erp.coda_oas_docline`, `psg_mydata_production_euw1_raw_erp.coda_oas_dochead`, `psg_mydata_production_euw1_raw_erp.coda_oas_company`, `psg_mydata_production_euw1_raw_erp.coda_oas_el3_element`.
+# MAGIC
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC #### Import Libraries
+# MAGIC ### Import Libraries
 
 # COMMAND ----------
 
@@ -27,14 +45,29 @@ from pyspark.sql import functions as F
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ####1.Connect to MDP and Extract Data
+# MAGIC ### Assign the source path(S3) to variables
 
 # COMMAND ----------
 
-# DBTITLE 1,Creating dataframes
+# DBTITLE 1,Create Variables_S3 path
+oas_docline_str = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_docline"
+oas_dochead_str = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_dochead"
+oas_company_str = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_company"
+oas_el3_element = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el3_element"
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC
+# MAGIC ### Creating Input Datasets with Source Paths
+
+# COMMAND ----------
+
+# DBTITLE 1,Creating Datasets
+# Load docline data from Delta table and select relevant columns
 oas_docline_df = (
     spark.read.format("delta")
-    .load("s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_docline")
+    .load(oas_docline_str)
     .select(
         "cmpcode",
         "doccode",
@@ -54,18 +87,31 @@ oas_docline_df = (
         "ref5"
     )
 )
-oas_dochead_df = spark.read.format("delta").load("s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_dochead").select("cmpcode","doccode","docdate","docnum")
-oas_company_df = spark.read.format("delta").load("s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_company").select("code")
-oas_el3_element_df = spark.read.format("delta").load("s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el3_element").select("el3_name","el3_code","el3_cmpcode","el3_elmlevel")
+
+# Load dochead data and select key columns
+oas_dochead_df = spark.read.format("delta").load(oas_dochead_str).select("cmpcode","doccode","docdate","docnum")
+
+# Load ompany data and select company code
+oas_company_df = spark.read.format("delta").load(oas_company_str).select("code")
+
+# Load element data and select relevant columns
+oas_el3_element_df = spark.read.format("delta").load(oas_el3_element).select("el3_name","el3_code","el3_cmpcode","el3_elmlevel")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ####2.Transform Data
+# MAGIC #### Creating `Aggregated Dataset`
+# MAGIC - **Input:** `oas_docline_df`
+# MAGIC - **Logic:** Aggregates document line records where `el2` starts with '021'.
+# MAGIC - **Key Calculations:**
+# MAGIC   - Sums `valuedoc` and `valuehome` after scaling by their decimal precision fields (`valuedoc_dp`, `valuehome_dp`).
+# MAGIC   - Uses `CASE` to treat null or zero decimal precision as zero value.
+# MAGIC   - Picks the maximum value for reference fields (`el2`, `el3`, `ref1`-`ref5`) per group.
+# MAGIC - **Grouping:** By `cmpcode`, `doccode`, `docnum`, `statpay`.
 
 # COMMAND ----------
 
-# DBTITLE 1,Creating aggregated df from oas_docline
+# DBTITLE 1,output: aggregated_df
 aggregated_df = (
     oas_docline_df
       .filter(F.col("el2").startswith("021"))
@@ -96,7 +142,16 @@ aggregated_df = (
 
 # COMMAND ----------
 
-# DBTITLE 1,Creating aggregated df2 from oas_docline
+# MAGIC %md
+# MAGIC #### Creating Dataset `Aggregated Dataset2`-Extracts additional business attributes
+# MAGIC - **Input:** `oas_docline_df`
+# MAGIC - **Logic:** Aggregates document line records where `el2` does **not** start with '021' and `el4` is not empty.
+# MAGIC - **Key Calculation:** Picks the maximum `el4` value per invoice.
+# MAGIC - **Grouping:** By `cmpcode`, `doccode`, `docnum`.
+
+# COMMAND ----------
+
+# DBTITLE 1,output: aggregated_df2
 aggregated_df2 = (
     oas_docline_df.filter((~F.col("el2").like("021%")) & (F.col("el4") != ""))
       .groupBy("cmpcode", "doccode", "docnum")
@@ -105,7 +160,21 @@ aggregated_df2 = (
 
 # COMMAND ----------
 
-# DBTITLE 1,Joining aggregated data with company and element data
+# MAGIC %md
+# MAGIC #### Creating`FinalAggregated Dataset -Enriching and Mapping Data` 
+# MAGIC - **Input:** `oas_dochead`, `aggregated_df, aggregated-df2, oas_company_df and oas_el3_element_df`.
+# MAGIC - **Logic:** 
+# MAGIC   - Maps company codes to business site IDs.
+# MAGIC   - Determines invoice number, type, service delivery site, and other business fields using `CASE` logic.
+# MAGIC - **Purpose:** Produces a business-ready, enriched final dataset with all key attributes and mappings applied.
+# MAGIC
+# MAGIC #### Filtering and Finalizing the Dataset
+# MAGIC
+# MAGIC - Filters out records with payment status 665, certain document codes, and those with specific keywords in the service delivery site invoice number (ex:'REIMB', 'olidated').
+
+# COMMAND ----------
+
+# DBTITLE 1,output: final_df
 final_df = (
     oas_dochead_df.alias("DH")
     .join(
@@ -262,28 +331,24 @@ final_df = (
         F.when((F.col("DH.cmpcode") == "BAS") & (F.col("DL.ref5").like("PT%")), F.col("DL.ref3"))
          .otherwise(F.coalesce(F.col("DL2.el4"), F.lit(""))).alias("JobNumber"),
         F.col("DL.statpay"),
-        F.format_number(F.col("DL.valuehome"), 2).alias("valuehome"),
-        F.format_number(F.col("DL.valuedoc"), 2).alias("valuedoc")
+        F.col("DL.valuehome").cast("double").alias("valuehome"),
+        F.col("DL.valuedoc").cast("double").alias("valuedoc")
     )
     .filter(
         (~F.upper(F.coalesce(F.col("ServiceDeliverySiteInvoiceNumber"), F.lit("[]"))).like("%REIMB%")) &
         (~F.lower(F.coalesce(F.col("ServiceDeliverySiteInvoiceNumber"), F.lit("[]"))).like("%olidated%"))
     )
-)
-
-# COMMAND ----------
-
-# DBTITLE 1,Remove duplicates
-final_df_dedup=final_df.dropDuplicates()
+).distinct()
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ####3.Save to S3- Load final data
+# MAGIC #### Save the final DataFrame to S3 in Delta format with overwrite mode:
 
 # COMMAND ----------
 
-final_df_dedup.write \
+# DBTITLE 1,Write_to_S3
+final_df.write \
     .mode("overwrite") \
     .format("delta") \
     .option("mergeSchema", "true") \
