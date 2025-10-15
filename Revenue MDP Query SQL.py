@@ -1,4 +1,34 @@
 # Databricks notebook source
+# MAGIC %md
+# MAGIC # Notebook Overview
+# MAGIC
+# MAGIC **Data Sources:**
+# MAGIC - `DH`: Document Head (`dochead`)
+# MAGIC - `DL`: Document Line (`docline`)
+# MAGIC - `C`: OAS Company (`doc_oas_company`)
+# MAGIC - `E2`: Element 2 (`ele2`)
+# MAGIC - `E3`: Element 3 (`ele3`)
+# MAGIC
+# MAGIC
+# MAGIC **Decimal Handling:**  
+# MAGIC Decimal values are processed using the helper function `convert_decimal_value` to ensure accuracy in calculations.
+# MAGIC
+# MAGIC **Business Logic:**  
+# MAGIC Calculations are performed according to the business logic outlined in the following query:  
+# MAGIC [Business Logic Reference](https://thermofisher.sharepoint.com/:t:/s/FinanceDigitalTransformationTeam/Ec_0OAidxsNPnXZpzDrO3ycBn7fwV0ol5rS-uMrKEIMJzQ?e=HVDNbT)
+# MAGIC
+# MAGIC **Output:**  
+# MAGIC The final DataFrame is saved to S3 at:  
+# MAGIC `s3://tfsdl-corp-fdt/test/psg/ctd/cert/revenue_mdp`
+# MAGIC
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Imports
+
+# COMMAND ----------
+
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
@@ -6,6 +36,30 @@ from pyspark.sql.window import Window
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Source and output Paths
+
+# COMMAND ----------
+
+#Source Paths
+dochead = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_dochead"
+doc_oas_company = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_company"
+docline = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_docline"
+ele2 = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el2_element"
+ele3 = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el3_element"
+
+#Output Path
+revenue_mdp_output= "s3://tfsdl-corp-fdt/test/psg/ctd/cert/revenue_mdp"
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Helper Functions
+
+# COMMAND ----------
+
+#Handle decimal values
 def convert_decimal_value(value_col, dp_col):
     """
     Convert decimal values based on decimal places
@@ -13,33 +67,39 @@ def convert_decimal_value(value_col, dp_col):
     """
     return F.when(F.col(dp_col) == 0, F.col(value_col)) \
             .otherwise(F.col(value_col) / F.pow(F.lit(10), F.col(dp_col) - 2))
-            
 
-# COMMAND ----------
-
-def process_psg_cert_revenue():
+#Load Data from sources
+def load_psg_cert_revenue_sources():
+    """
+    Loads all required data sources for PSG Cert Revenue processing.
+    Returns: DH, DL, C, E2, E3 DataFrames
+    """
     try:
-        
-        # Data sources
-        dochead = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_dochead"
-        doc_oas_company = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_company"
-        docline = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_docline"
-        # ele1 = "s3://tfsdl-lslpg-fdt-test/psg_ctd_el1"
-        ele2 = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el2_element"
-        ele3 = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el3_element"
-        # ele4 = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el4_element"
-        
-        # Load data
         DH = spark.read.format("delta").load(dochead)
         DL = spark.read.format("delta").load(docline)
         C = spark.read.format("delta").load(doc_oas_company)
         E2 = spark.read.format("delta").load(ele2)
         E3 = spark.read.format("delta").load(ele3)
-        # E4 = spark.read.format("delta").load(ele4)
-        # E1 = spark.read.format("csv").option("header", True).option("inferSchema", True).load(ele1)
+        return DH, DL, C, E2, E3
+    except Exception as e:
+        raise Exception(f"Error loading PSG Cert Revenue sources: {str(e)}")
+            
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Calculations
+
+# COMMAND ----------
+
+# DBTITLE 1,ru
+def process_psg_cert_revenue(DH=None, DL=None, C=None, E2=None, E3=None):
+    try:
+        # Load data 
+        if DH is None or DL is None or C is None or E2 is None or E3 is None:
+            DH, DL, C, E2, E3 = load_psg_cert_revenue_sources()
         
         #1 ARLines: Get customer-related lines with el3
-      
         ar_lines = DL.alias("DL").join(
             DH.alias("DH"),
             (F.trim(F.col("DL.cmpcode")) == F.trim(F.col("DH.cmpcode"))) &
@@ -71,9 +131,8 @@ def process_psg_cert_revenue():
         )
         
         ar_lines.cache()
-        # ar_count = ar_lines.count()
         
-        # (4) Base: Join DL+DH and precompute all expressions        
+        #Base: Join DL+DH and precompute all expressions        
         base = DL.alias("DL2").join(
             DH.alias("DH"),
             (F.trim(F.col("DL2.cmpcode")) == F.trim(F.col("DH.cmpcode"))) &
@@ -84,8 +143,6 @@ def process_psg_cert_revenue():
             F.col("DL2.*"),
             F.col("DH.docdate"),
             F.col("DH.curdoc"),
-            
-            # Precompute Global_Identifier
             F.concat(
                 F.upper(F.col("DL2.cmpcode")),
                 F.lit("-"),
@@ -95,8 +152,6 @@ def process_psg_cert_revenue():
                       F.col("DL2.ref5"))
                 .otherwise(F.ltrim(F.col("DL2.docnum")))
             ).alias("global_identifier"),
-            
-            # Precompute InvoiceNumber
             F.when(F.col("DH.cmpcode").isin(['ALLENTOWN', 'MAI', 'CHINA', 'CLINTRAK', 'MP', 'INDY']), 
                    F.col("DL2.ref1"))
             .when(F.col("DH.cmpcode").isin(['BAS', 'WAR', 'HEG']), 
@@ -107,8 +162,6 @@ def process_psg_cert_revenue():
                   F.col("DL2.ref1"))
             .otherwise(F.lit("Unknown"))
             .alias("invoice_number"),
-            
-            # Precompute PO
             F.when(F.col("DH.cmpcode") == "SUZHOU", F.col("DL2.ref2"))
             .when((F.col("DH.cmpcode") == "WAR") & (F.col("DH.docdate") >= F.lit("2020-11-10").cast("date")), 
                   F.col("DL2.ref3"))
@@ -122,8 +175,6 @@ def process_psg_cert_revenue():
                   F.col("DL2.ref2"))
             .otherwise(F.col("DL2.ref4"))
             .alias("po_value"),
-            
-            # Precompute Protocol
             F.when(F.col("DH.cmpcode") == "SUZHOU", F.col("DL2.ref3"))
             .when((F.col("DH.cmpcode") == "KOREA") & (F.col("DH.docdate") <= F.lit("2024-07-12").cast("date")), 
                   F.col("DL2.ref3"))
@@ -136,8 +187,6 @@ def process_psg_cert_revenue():
         )
         
         base.cache()
-        # base_count = base.count()        
-        #  job_defaults: Get default JobNumber per cmpcode (earliest non-blank el4)        
         window_spec = Window.partitionBy("cmpcode").orderBy("docdate")
         
         job_defaults = base.where(
@@ -150,8 +199,7 @@ def process_psg_cert_revenue():
             F.col("cmpcode"),
             F.col("el4").alias("default_el4")
         )
-                
-        # Excluded doccode list
+        #exclude doccodes    
         excluded_doccodes = [
             'DISPERSE', 'MATCHING', 'PCANCEL', 'PINV', 'PINVDBT', 'RECEIPTS', 
             'Y/E-PROC-BS', 'CPAY', 'CREC', 'OBAL', 'PCRN', 'REVAL', 'REVALR', 
@@ -160,7 +208,6 @@ def process_psg_cert_revenue():
             'RECLASS', 'REVACC', 'REVERSAL', 'JGEN', 'JGENREV', 'JREVGEN'
         ]
         
-        # Main aggregation - First add customer el3 from ar_lines as a separate column
         base_with_customer = base.alias("b").join(
             ar_lines.alias("a"),
             (F.col("a.ar_cmpcode") == F.col("b.cmpcode")) &
@@ -172,7 +219,6 @@ def process_psg_cert_revenue():
             F.col("a.customer_el3")
         )
         
-        # Now do the rest of the joins on base_with_customer
         agg = base_with_customer.alias("bwc").join(
             C.alias("C"),
             F.col("C.code") == F.col("bwc.cmpcode"),
@@ -228,14 +274,12 @@ def process_psg_cert_revenue():
             F.col("valuehome"),
             F.col("valuedoc")
         )
-                
-        # Final SELECT with SiteID mapping and JobNumber default
+        #select final columns    
         revnue_mdp = agg.alias("agg").join(
             job_defaults.alias("jd"),
             F.col("agg.cmpcode") == F.col("jd.cmpcode"),
             "left"
         ).select(
-            # SiteID mapping
             F.when(F.col("agg.cmpcode") == "ALLENTOWN", F.lit("0"))
             .when(F.col("agg.cmpcode") == "BAS", F.lit("1"))
             .when(F.col("agg.cmpcode") == "MAI", F.lit("2"))
@@ -252,7 +296,6 @@ def process_psg_cert_revenue():
             .otherwise(F.lit("Unknown"))
             .cast("string")
             .alias("SiteID"),
-            
             F.col("agg.cmpcode"),
             F.col("agg.global_identifier").alias("Global_Identifier"),
             F.col("agg.statpay"),
@@ -267,13 +310,10 @@ def process_psg_cert_revenue():
             F.col("agg.invoice_number").alias("InvoiceNumber"),
             F.col("agg.po_value").alias("PO"),
             F.col("agg.protocol_value").alias("Protocol"),
-            
-            # JobNumber with default fallback
             F.coalesce(
                 F.when(F.col("agg.el4") != "", F.col("agg.el4")).otherwise(F.lit(None)),
                 F.col("jd.default_el4")
             ).alias("JobNumber"),
-            
             F.col("agg.docnum"),
             F.col("agg.doccode"),
             F.col("agg.el2"),
@@ -284,19 +324,22 @@ def process_psg_cert_revenue():
         
     except Exception as e:
         error_msg = f"Error in process_psg_cert_revenue: {str(e)}"
-        print(error_msg)
         raise Exception(error_msg)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Main fucntion
 
 # COMMAND ----------
 
 if __name__ == "__main__":
     try:
         df_revnue_mdp = process_psg_cert_revenue()
-        output_path = "s3://tfsdl-corp-fdt/test/psg/ctd/cert/revenue_mdp"
         try:
-            df_revnue_mdp.write.mode("overwrite").format("delta").save(output_path)
+            df_revnue_mdp.write.mode("overwrite").format("delta").save(revenue_mdp_output)
         except Exception as write_err:
-            raise Exception(f"Failed to write revenue_mdp to {output_path}: {str(write_err)}")
+            raise Exception(f"Failed to write revenue_mdp to {revenue_mdp_output}: {str(write_err)}")
     except Exception as e:
         raise Exception(f"Failed to execute: {str(e)}")
 
