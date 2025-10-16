@@ -202,7 +202,9 @@ token = get_token(client_secret, client_id)["access_token"]  # Get access token 
 weburl = "/CTD/"
 
 # SharePoint lookup file for CODA Reference Correction
-file_name = "CODA-Reference Correction.xlsx"
+file_name_codaCorrection = "CODA-Reference Correction.xlsx"
+file_name_mapEntity="MAP-Entity.xlsx"
+file_name_mapIC_Entity="MAP-IC_Entity.xlsx"
 
 
 # COMMAND ----------
@@ -248,10 +250,24 @@ oas_el3_element_df = spark.read.format("delta").load(oas_el3_element).select("el
 
 # Download SharePoint Excel file and load as pandas DataFrame
 coda_ref_correction_df = get_sharepoint_excel_df(
-            weburl + '/', file_name, client_id, client_secret, driver_id,
+            weburl + '/', file_name_codaCorrection, client_id, client_secret, driver_id,
             skip_num_rows=0, sheet_prefix="Sheet1")
 # Convert pandas DataFrame to Spark DataFrame for coda_ref_correction_df
-coda_ref_correction_df = spark.createDataFrame(coda_ref_correction_df)            
+coda_ref_correction_df = spark.createDataFrame(coda_ref_correction_df)       
+
+# Download SharePoint Excel file and load as pandas DataFrame
+map_entity_df = get_sharepoint_excel_df(
+            weburl + '/', file_name_mapEntity, client_id, client_secret, driver_id,
+            skip_num_rows=0, sheet_prefix="Sheet1")
+# Convert pandas DataFrame to Spark DataFrame for coda_ref_correction_df
+map_entity_df = spark.createDataFrame(map_entity_df) 
+
+# Download SharePoint Excel file and load as pandas DataFrame
+map_ICentity_df = get_sharepoint_excel_df(
+            weburl + '/', file_name_mapIC_Entity, client_id, client_secret, driver_id,
+            skip_num_rows=0, sheet_prefix="Sheet1")
+# Convert pandas DataFrame to Spark DataFrame for coda_ref_correction_df
+map_ICentity_df = spark.createDataFrame(map_ICentity_df) 
 
 # COMMAND ----------
 
@@ -723,6 +739,246 @@ result_df = (
 # result_df.createOrReplaceTempView("final_df_view")
 # #final_df_dedup.createOrReplaceTempView("final_df_view")
 # columns = result_df.columns
+# columns_str = ", ".join([f"`{col}`" for col in columns])
+# query = f"""
+#     SELECT {columns_str}, COUNT(*) as count
+#     FROM final_df_view
+#     GROUP BY {columns_str}
+#     HAVING COUNT(*) > 1
+# """
+# duplicate_records_df = spark.sql(query)
+# display(duplicate_records_df)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ###=================5425===============
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Overview
+# MAGIC
+# MAGIC This notebook processes invoice data by joining, transforming, and generating key identifiers for AR (Accounts Receivable) reporting. It integrates mapping tables to enrich invoice records, applies business logic for key generation, and standardizes site names.
+# MAGIC
+# MAGIC ### Purpose
+# MAGIC
+# MAGIC - Filter and clean invoice records.
+# MAGIC - Enrich invoices with site and intercompany mapping data.
+# MAGIC - Generate unique keys for AR and intercompany reconciliation.
+# MAGIC - Standardize site names for reporting consistency.
+# MAGIC
+# MAGIC ### Input Datasets
+# MAGIC
+# MAGIC - `result_df`: Spark DataFrame containing invoice records (which is cert aqe query results derived from above).
+# MAGIC - `map_entity_df`: Spark DataFrame mapping site codes to GPM site and cForia values.
+# MAGIC - `map_ICentity_df`: Spark DataFrame mapping intercompany partner information.
+# MAGIC
+# MAGIC ### Output
+# MAGIC
+# MAGIC - `final_df`: Spark DataFrame with AR reporting columns, enriched and standardized for downstream analysis.
+
+# COMMAND ----------
+
+# Step 1: Filter rows on cert aqe dataset(its called result_df) with non-null and non-empty InvoiceNumber
+filtered_rows1 = (
+    result_df
+    .filter(
+        (F.col("InvoiceNumber").isNotNull()) & (F.col("InvoiceNumber") != "")
+    )
+)
+
+# Step 2: Merge with MAP-Entity table on cmpcode = CODA
+merged_map_entity = (
+    filtered_rows1.join(
+        map_entity_df,
+        filtered_rows1["cmpcode"] == map_entity_df["CODA"],
+        "left"
+    )
+    .select(
+        filtered_rows1["*"],
+        map_entity_df["gpm_site"],
+        map_entity_df["cForia"]
+    )
+)
+
+# Step 3: Merge with MAP-IC_Entity table on _InvoiceSite_DeliverySite = InvoiceCmp_OriginatingIC
+# Rename columns with hyphens to underscores for compatibility
+map_ICentity_df_fixed = (
+    map_ICentity_df
+    .withColumnRenamed("InvoiceCmp-OriginatingIC", "InvoiceCmp_OriginatingIC")
+    .withColumnRenamed("IC_Partner-OMNI", "IC_Partner_OMNI")
+    .withColumnRenamed("IC_Partner-CODA", "IC_Partner_CODA")
+)
+
+merged_map_ic_entity = (
+    merged_map_entity.join(
+        map_ICentity_df_fixed,
+        merged_map_entity["_InvoiceSite_DeliverySite"] == map_ICentity_df_fixed["InvoiceCmp_OriginatingIC"],
+        "left"
+    )
+    .select(
+        merged_map_entity["*"],
+        map_ICentity_df_fixed["IC_Partner_OMNI"],
+        map_ICentity_df_fixed["IC_Partner_CODA"]
+    )
+)
+
+# Step 4: Replace null IC_Partner_CODA with 'Unknown' and update cmpcode for Korea
+replaced_values = (
+    merged_map_ic_entity
+    .withColumn(
+        "IC_Partner_CODA_1",
+        F.coalesce(F.col("IC_Partner_CODA"), F.lit("Unknown"))
+    )
+    .withColumn(
+        "cmpcode_1",
+        F.when(F.col("cmpcode") == "KOREA", F.lit("SOUTH KOREA")).otherwise(F.col("cmpcode"))
+    )
+)
+
+# Step 5: Add _keyCforia column based on doccode and cForia/InvoiceNumber
+added_keyCforia = (
+    replaced_values
+    .withColumn(
+        "_keyCforia",
+        F.when(
+            F.lower(F.col("doccode")).like("%cancel%"),
+            F.concat(F.col("doccode"), F.lit("c"))
+        ).otherwise(
+            F.concat(F.coalesce(F.col("cForia"), F.lit("")), F.coalesce(F.col("InvoiceNumber"), F.lit("")))
+        )
+    )
+)
+
+# Step 6: Add _key_global_identifier column with custom logic
+added_key_global_identifier = (
+    added_keyCforia
+    .withColumn(
+        "_key_global_identifier",
+        F.when(
+            F.right(
+                F.coalesce(F.col("ServiceDeliverySiteInvoiceNumber"), F.lit("")),
+                F.lit(1).cast("string")
+            ) == "A",
+            F.concat(
+                F.coalesce(F.col("cmpcode_1"), F.lit("")),
+                F.lit("-"),
+                F.coalesce(F.col("InvoiceNumber"), F.lit(""))
+            )
+        )
+        .when(
+            F.col("ServiceDeliverySiteInvoiceNumber") == "Unknown",
+            F.concat(
+                F.coalesce(F.col("cmpcode_1"), F.lit("")),
+                F.lit("-"),
+                F.coalesce(F.col("InvoiceNumber"), F.lit(""))
+            )
+        )
+        .when(
+            F.col("ICEntityMapKey") == "WARWAR",
+            F.concat(
+                F.lit("WAR-"),
+                F.coalesce(F.col("ServiceDeliverySiteInvoiceNumber"), F.lit(""))
+            )
+        )
+        .when(
+            F.col("InvoiceType") == "IC",
+            F.concat(
+                F.coalesce(F.col("cmpcode_1"), F.lit("")),
+                F.lit("-"),
+                F.coalesce(F.col("InvoiceNumber"), F.lit(""))
+            )
+        )
+        .otherwise(
+            F.concat(
+                F.upper(F.coalesce(F.col("IC_Partner_CODA_1"), F.lit(""))),
+                F.lit("-"),
+                F.coalesce(F.col("ServiceDeliverySiteInvoiceNumber"), F.lit(""))
+            )
+        )
+    )
+)
+
+# Step 7: Add _key_AR_CODA column as SiteID-InvoiceNumber
+added_key_AR_CODA = (
+    added_key_global_identifier
+    .withColumn(
+        "_key_AR_CODA",
+        F.concat(
+            F.coalesce(F.col("SiteID"), F.lit("")),
+            F.lit("-"),
+            F.coalesce(F.col("InvoiceNumber"), F.lit(""))
+        )
+    )
+)
+
+# Step 8: Rename columns for final output
+renamed_columns = (
+    added_key_AR_CODA
+    .select(
+        F.col("SiteID").alias("SiteID"),
+        F.col("cmpcode_1").alias("AR Billing Site"),
+        F.col("doccode").alias("doccode"),
+        F.col("InvoiceDate").alias("Invoice_Date"),
+        F.col("InvoiceNumber").alias("AR_Invoice_Number"),
+        F.col("DocType").alias("AR_Doc_Type"),
+        F.col("InvoiceType").alias("AR_Invoice_Type"),
+        F.col("ICEntityMapKey").alias("ICEntityMapKey"),
+        F.col("_keyClientID").alias("_keyClientID"),
+        F.col("CustomerNumber").alias("AR_Customer_Number"),
+        F.col("CustomerName").alias("AR_Customer_Name"),
+        F.col("PO").alias("AR_PO"),
+        F.col("Protocol").alias("AR_Protocol"),
+        F.col("JobNumber").alias("AR_Job_Number"),
+        F.col("statpay").alias("Stat_Pay"),
+        F.col("valuehome").alias("valuehome"),
+        F.col("valuedoc").alias("valuedoc"),
+        F.col("ServiceDeliverySite").alias("AR Originating Site"),
+        F.col("ServiceDeliverySiteInvoiceNumber").alias("AR_Originating_Invoice"),
+        F.col("_InvoiceSite_DeliverySite").alias("_InvoiceSite_DeliverySite"),
+        F.col("gpm_site").alias("gpm_site"),
+        F.col("cForia").alias("cForia"),
+        F.col("IC_Partner_OMNI").alias("IC_Partner_OMNI"),
+        F.col("IC_Partner_CODA_1").alias("IC_Partner_CODA"),
+        F.col("_keyCforia"),
+        F.col("_key_global_identifier"),
+        F.col("_key_AR_CODA")
+    )
+)
+
+# Step 9: Replace 'MAI' with 'HORSHAM' in AR Billing Site and AR Originating Site
+final_df = (
+    renamed_columns
+    .withColumn(
+        "AR Billing Site",
+        F.regexp_replace(
+            F.regexp_replace(F.col("AR Billing Site"), "MAI", "HORSHAM"),
+            "MAI",
+            "HORSHAM"
+        )
+    )
+    .withColumn(
+        "AR Originating Site",
+        F.regexp_replace(
+            F.regexp_replace(F.col("AR Originating Site"), "MAI", "HORSHAM"),
+            "MAI",
+            "HORSHAM"
+        )
+    )
+)
+
+# COMMAND ----------
+
+#Validation Checks: 1.schema 2.data 3.duplicates 4.count 5.data in s3
+#final_df.printSchema()
+#display(final_df)
+
+#print(final_df.count()) 
+
+# #Find duplicates
+# final_df.createOrReplaceTempView("final_df_view")
+# columns = final_df.columns
 # columns_str = ", ".join([f"`{col}`" for col in columns])
 # query = f"""
 #     SELECT {columns_str}, COUNT(*) as count
