@@ -83,8 +83,8 @@ jdbc_url = "jdbc:sqlserver://fvzh3nukvj3upilj5pvxu2r3m4-dhobibgnitienogvfhocpraz
 
 connection_properties = {
     "authentication": "ActiveDirectoryPassword",
-    "user": "danish.mushtaq@thermofisher.com",
-    "password": "Rise123!@",
+    "user": "CHALL.Omni_ESP@thermofisher.com",
+    "password": "Njiyy22bufe3nf2f!oya#8E23sYe",
     "driver": "com.microsoft.sqlserver.jdbc.SQLServerDriver"
 }
 

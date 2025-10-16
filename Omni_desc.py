@@ -78,12 +78,14 @@ from itertools import chain
 # COMMAND ----------
 
 # Connect to Microsoft Fabric Datawarehouse using Azure Active Directory authentication
-jdbc_url = "jdbc:sqlserver://fvzh3nukvj3upilj5pvxu2r3m4-dhobibgnitienogvfhocprazui.datawarehouse.fabric.microsoft.com:1433;database=DW_Platinum_Prod"
+jdbc_url = "jdbc:sqlserver://fvzh3nukvj3upilj5pvxu2r3m4-dhobibgnitienogvfhocprazui.datawarehouse.fabric.microsoft.com:1433;database=GDS - Warehouse"
+# jdbc_url = "jdbc:sqlserver://fvzh3nukvj3upilj5pvxu2r3m4-3g7rhhmom6oefcs3o5op3kikom.datawarehouse.fabric.microsoft.com:1433;database=GDS - Warehouse"
+
 
 connection_properties = {
     "authentication": "ActiveDirectoryPassword",
-    "user": "danish.mushtaq@thermofisher.com",
-    "password": "Rise123!@",
+    "user": "CHALL.Omni_ESP@thermofisher.com",
+    "password": "Njiyy22bufe3nf2f!oya#8E23sYe",
     "driver": "com.microsoft.sqlserver.jdbc.SQLServerDriver"
 }
 

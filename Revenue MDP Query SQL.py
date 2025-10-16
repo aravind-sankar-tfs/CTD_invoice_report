@@ -3,11 +3,16 @@
 # MAGIC # Notebook Overview
 # MAGIC
 # MAGIC **Data Sources:**
-# MAGIC - `DH`: Document Head (`dochead`)
-# MAGIC - `DL`: Document Line (`docline`)
-# MAGIC - `C`: OAS Company (`doc_oas_company`)
-# MAGIC - `E2`: Element 2 (`ele2`)
-# MAGIC - `E3`: Element 3 (`ele3`)
+# MAGIC - `DH`: Document Head (`dochead`)  
+# MAGIC   Path: `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_dochead`
+# MAGIC - `DL`: Document Line (`docline`)  
+# MAGIC   Path: `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_docline`
+# MAGIC - `C`: OAS Company (`doc_oas_company`)  
+# MAGIC   Path: `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_company`
+# MAGIC - `E2`: Element 2 (`ele2`)  
+# MAGIC   Path: `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el2_element`
+# MAGIC - `E3`: Element 3 (`ele3`)  
+# MAGIC   Path: `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el3_element`
 # MAGIC
 # MAGIC
 # MAGIC **Decimal Handling:**  
@@ -20,6 +25,20 @@
 # MAGIC **Output:**  
 # MAGIC The final DataFrame is saved to S3 at:  
 # MAGIC `s3://tfsdl-corp-fdt/test/psg/ctd/cert/revenue_mdp`
+# MAGIC
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Key  Columns Used :
+# MAGIC | Purpose                           | Columns                                | Description                                                |
+# MAGIC | --------------------------------- | -------------------------------------- | ---------------------------------------------------------- |
+# MAGIC | **Primary joins between DL & DH** | `cmpcode`, `doccode`, `docnum`         | Used as composite keys to link header and line-level data. |
+# MAGIC | **Join with AR lines**            | `cmpcode`, `doccode`, `docnum`         | Used again to attach customer-related `el3`.               |
+# MAGIC | **Join with company table (C)**   | `cmpcode` ↔ `C.code`                   | To bring in home currency and company details.             |
+# MAGIC | **Join with E2 (EL2)**            | `cmpcode`, `el2`                       | Links to element-level 2 info.                             |
+# MAGIC | **Join with E3 (CUS)**            | `cmpcode`, `customer_el3` ↔ `el3_code` | Links to element-level 3 (customer).                       |
+# MAGIC | **Join with job defaults**        | `cmpcode`                              | Used to get default `el4`.                                 |
 # MAGIC
 
 # COMMAND ----------
