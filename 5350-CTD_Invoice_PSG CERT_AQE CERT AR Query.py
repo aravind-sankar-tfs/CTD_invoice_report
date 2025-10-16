@@ -216,7 +216,7 @@ file_name = "CODA-Reference Correction.xlsx"
 # Load OAS document line Delta table from S3 and select relevant columns
 oas_docline_df = (
     spark.read.format("delta")
-    .load("s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_docline")
+    .load(oas_docline_str)
     .select(
         "cmpcode",
         "doccode",
@@ -238,13 +238,13 @@ oas_docline_df = (
 )
 
 # Load OAS document head Delta table from S3 and select relevant columns
-oas_dochead_df = spark.read.format("delta").load("s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_dochead").select("cmpcode","doccode","docdate","docnum")
+oas_dochead_df = spark.read.format("delta").load(oas_dochead_str).select("cmpcode","doccode","docdate","docnum")
 
 # Load OAS company Delta table from S3 and select relevant columns
-oas_company_df = spark.read.format("delta").load("s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_company").select("code")
+oas_company_df = spark.read.format("delta").load(oas_company_str).select("code")
 
 # Load OAS EL3 element Delta table from S3 and select relevant columns
-oas_el3_element_df = spark.read.format("delta").load("s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el3_element").select("el3_name","el3_code","el3_cmpcode","el3_elmlevel")
+oas_el3_element_df = spark.read.format("delta").load(oas_el3_element).select("el3_name","el3_code","el3_cmpcode","el3_elmlevel")
 
 # Download SharePoint Excel file and load as pandas DataFrame
 coda_ref_correction_df = get_sharepoint_excel_df(
