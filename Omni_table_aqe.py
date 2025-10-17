@@ -76,7 +76,9 @@ df_omni_table_selected = df_omni_table.select(
     "invoicenumber",
     "key_global_identifier",
     "netvalue",
-    "quantity"
+    "quantity",
+    "currency"
+    
 )
 
 # COMMAND ----------
@@ -113,7 +115,7 @@ df_omni_table_aqe = df_omni_table_aqe.filter(~col("Global_Identifier").contains(
 
 try:
     # Write DataFrame to S3 in Delta format
-    df_omni_table_aqe.write.format("delta").mode("overwrite").save(omni_table_aqe_destination)
+    df_omni_table_aqe.write.format("delta").mode("overwrite").option("mergeSchema", "true").save(omni_table_aqe_destination)
 except Exception as e:
-    print(f"Error writing Delta table: {e}")
+    raise RuntimeError(f"Error writing Delta table: {e}")
 
