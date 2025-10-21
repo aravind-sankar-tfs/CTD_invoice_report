@@ -970,6 +970,14 @@ final_df = (
 
 # COMMAND ----------
 
+final_df.write \
+    .mode("overwrite") \
+    .format("delta") \
+    .option("mergeSchema", "true") \
+    .save("s3://tfsdl-corp-fdt/test/psg/ctd/cert/aqe_ref/psg_ctd_cert_aqe")
+
+# COMMAND ----------
+
 #Validation Checks: 1.schema 2.data 3.duplicates 4.count 5.data in s3
 #final_df.printSchema()
 #display(final_df)

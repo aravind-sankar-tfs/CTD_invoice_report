@@ -722,6 +722,30 @@ output_df = joined_cpq.withColumn("Source", F.lit("CODA"))
 
 # COMMAND ----------
 
+# output_df = output_df.toDF(
+#     *[
+#         col_name.replace(' ', '_')
+#         .replace(',', '_')
+#         .replace(';', '_')
+#         .replace('{', '_')
+#         .replace('}', '_')
+#         .replace('(', '_')
+#         .replace(')', '_')
+#         .replace('\n', '_')
+#         .replace('\t', '_')
+#         .replace('=', '_')
+#         for col_name in output_df.columns
+#     ]
+# )
+
+# output_df.write \
+#     .mode("overwrite") \
+#     .format("delta") \
+#     .option("mergeSchema", "true") \
+#     .save("s3://tfsdl-corp-fdt/test/psg/ctd/cert/aqe_ref/psg_ctd_cert_aqe_mdp_5426")
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC #### Code Validation
 
