@@ -1,31 +1,141 @@
 # Databricks notebook source
 # MAGIC %md
+# MAGIC # Notebook Overview: Data Integration and Transformation Pipeline
+# MAGIC
+# MAGIC This notebook orchestrates a robust data integration workflow, merging and transforming two key datasets—**MDP AQE** and **OMNI TABLE AQE**—to produce a unified, analysis-ready table.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## 1. Data Loading
+# MAGIC
+# MAGIC - **Sources:**  
+# MAGIC   - `mdp_aqe`: `s3://tfsdl-corp-fdt/test/psg/ctd/cert/aqe_ref/psg_ctd_cert_aqe_mdp_5426`  
+# MAGIC   - `omni_table_aqe`: `s3://tfsdl-corp-fdt/test/psg/ctd/cert/omni_table_aqe`
+# MAGIC - **DataFrames:**  
+# MAGIC   - Loaded as `mdp_df` and `omni_df`.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## 2. Data Joining
+# MAGIC
+# MAGIC - **Aliases:**  
+# MAGIC   - `m` for `mdp_df`, `o` for `omni_df`.
+# MAGIC - **Join Type:**  
+# MAGIC   - Full outer join on global identifier fields to retain all records.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## 3. Column Selection & Expansion
+# MAGIC
+# MAGIC - **From `mdp_df` (`m`):**  
+# MAGIC   - All columns.
+# MAGIC - **From `omni_df` (`o`):**  
+# MAGIC   - Selected and renamed:  
+# MAGIC     - `Currency` → `Currency_o`  
+# MAGIC     - `Global_Identifier` → `Global_Identifier_o`  
+# MAGIC     - `InvoiceNumber` → `InvoiceNumber_o`  
+# MAGIC     - `key_global_identifier` → `key_global_identifier_o`  
+# MAGIC     - `NetValue`, `Quantity`
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## 4. Type Conversion & Column Merging
+# MAGIC
+# MAGIC - **Type Conversion:**  
+# MAGIC   - `valuedoc` cast to `double`.
+# MAGIC - **Unified Fields:**  
+# MAGIC   - `InvoiceNumberNew`, `key_global_identifier_new`, `Global_Identifier_New`, `Currency.1`  
+# MAGIC   - Prioritizes non-null values from both sources for consistency.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## 5. Data Cleaning
+# MAGIC
+# MAGIC - **Filtering:**  
+# MAGIC   - Retain rows where `key_global_identifier_new` is not null and not empty.
+# MAGIC - **Null Handling:**  
+# MAGIC   - Fill missing values in `NetValue`, `Quantity`, and `valuedoc` with `0`.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## 6. Column Renaming & Transformation
+# MAGIC
+# MAGIC - **Renaming:**  
+# MAGIC   - Streamlines column names for clarity.
+# MAGIC - **Quantity Adjustment:**  
+# MAGIC   - If `NetValue ≠ 0`, set `Quantity = -QuantityOG`; else, retain original.
+# MAGIC - **Type Casting:**  
+# MAGIC   - Ensure `NetValue` and `Quantity` are `double`.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## 7. Advanced Filtering
+# MAGIC
+# MAGIC - **NetValue Filter:**  
+# MAGIC   - Keep rows with `|NetValue| ≥ 0.01`.
+# MAGIC - **NetValue0 Presence:**  
+# MAGIC   - Retain rows where `NetValue0` is not null.
+# MAGIC - **Global Identifier Presence:**  
+# MAGIC   - Retain rows with non-null `Global_Identifier`.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## 8. Description Enrichment
+# MAGIC
+# MAGIC - **Description Column:**  
+# MAGIC   - If `CPQ_Category` is null: `"Derived"`  
+# MAGIC   - Else: `"Derived: <CPQ_Category>, <CPQ_SubCategory>"`
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## Result
+# MAGIC   - The final result is saved to `merged_table = "s3://tfsdl-corp-fdt/test/psg/ctd/cert/merged_table"`  
+# MAGIC   - Format: Delta Lake  
+# MAGIC   - Write mode: Overwrite
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ###Imports
 
 # COMMAND ----------
 
+# DBTITLE 1,Import Libraries
 from pyspark.sql import functions as F
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ###Data urls
+# MAGIC ###Assign the source path(S3) to variables
 
 # COMMAND ----------
 
+# DBTITLE 1,Source  data urls
 mdp_aqe="s3://tfsdl-corp-fdt/test/psg/ctd/cert/aqe_ref/psg_ctd_cert_aqe_mdp_5426"
 omni_table_aqe="s3://tfsdl-corp-fdt/test/psg/ctd/cert/omni_table_aqe"
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Assign the Destination path(S3) to variables
+
+# COMMAND ----------
+
+# DBTITLE 1,Merged table urls
 merged_table="s3://tfsdl-corp-fdt/test/psg/ctd/cert/merged_table"
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ### Read Data from Sources
-# MAGIC - OMNI TABLE AQE
-# MAGIC - MDP REVENUE AQE
+# MAGIC
+# MAGIC - Read the MDP AQE data from the specified S3 path and store it in the DataFrame `mdp_df`.
+# MAGIC - Read the OMNI AQE data from the specified S3 path and store it in the DataFrame `omni_df`.
 
 # COMMAND ----------
 
+# DBTITLE 1,Read data from sources: MDP AQE +OMNI AQE
 try:
     # Read MDP Table
     mdp_df = spark.read.format("delta").load("s3://tfsdl-corp-fdt/test/psg/ctd/cert/aqe_ref/psg_ctd_cert_aqe_mdp_5426")
@@ -214,10 +324,43 @@ df_casted = df_casted.withColumn("Quantity", F.col("Quantity").cast("double"))
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Filter Data by NetValue, NetValue0, and Global Identifier
+# MAGIC
+# MAGIC This section applies a series of filters to the processed DataFrame to ensure data quality and relevance for further analysis:
+# MAGIC
+# MAGIC 1. **Filter by NetValue**  
+# MAGIC    - Retains only rows where the absolute value of the `NetValue` column is greater than or equal to 0.01.  
+# MAGIC    - This step removes records with negligible or zero net values.
+# MAGIC
+# MAGIC 2. **Filter by NetValue0 Presence**  
+# MAGIC    - Further filters the DataFrame to include only rows where the `NetValue0` column is not null.  
+# MAGIC    - Ensures that all retained records have a valid original net value.
+# MAGIC
+# MAGIC 3. **Filter by Global Identifier Presence**  
+# MAGIC    - Applies a final filter to keep only rows where the `Global_Identifier` column is not null.  
+# MAGIC    - Guarantees that each record has a valid global identifier for traceability.
+# MAGIC
+# MAGIC The resulting DataFrame contains only rows with meaningful net values, valid original net values, and non-null global identifiers.
+
+# COMMAND ----------
+
 # Apply Filters on netvalue , netvalue0 and global identifier
 df_netvalue_filtered = df_casted.filter(F.abs(F.col("NetValue")) >= 0.01)
 df_netvalue0_filtered = df_netvalue_filtered.filter(F.col("NetValue0").isNotNull())
 df_final_filtered = df_netvalue0_filtered.filter(F.col("Global_Identifier").isNotNull())
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Add Description Column
+# MAGIC
+# MAGIC This step adds a new column, `Description`, to the DataFrame:
+# MAGIC
+# MAGIC - If the `CPQ_Category` column is null, the `Description` is set to `"Derived"`.
+# MAGIC - Otherwise, the `Description` is constructed by concatenating `"Derived:"`, the value of `CPQ_Category`, and the value of `CPQ_SubCategory`, separated by commas.
+# MAGIC
+# MAGIC This ensures that each row has a descriptive label based on the presence and values of the CPQ category fields.
 
 # COMMAND ----------
 
@@ -227,6 +370,17 @@ df_merged_table = df_final_filtered.withColumn(
     F.when(F.col("CPQ_Category").isNull(), F.lit("Derived"))
      .otherwise(F.concat_ws(", ", F.lit("Derived:"), F.col("CPQ_Category"), F.col("CPQ_SubCategory")))
 )
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Save Final DataFrame to S3 in Delta Format
+# MAGIC
+# MAGIC To save the final DataFrame (`df_merged_table`) to the S3 path `s3://tfsdl-corp-fdt/test/psg/ctd/cert/merged_table` in Delta format using overwrite mode
+# MAGIC - **DataFrame**: `df_merged_table`
+# MAGIC - **Destination**: S3 path specified by `merged_table`
+# MAGIC - **Format**: Delta Lake
+# MAGIC - **Write Mode**: Overwrite (replaces existing data at the path)
 
 # COMMAND ----------
 

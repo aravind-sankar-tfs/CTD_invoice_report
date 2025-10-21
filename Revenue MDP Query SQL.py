@@ -1,50 +1,165 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Notebook Overview
+# MAGIC #Revenue MDP 
 # MAGIC
-# MAGIC **Data Sources:**
-# MAGIC - `DH`: Document Head (`dochead`)  
-# MAGIC   Path: `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_dochead`
-# MAGIC - `DL`: Document Line (`docline`)  
-# MAGIC   Path: `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_docline`
-# MAGIC - `C`: OAS Company (`doc_oas_company`)  
-# MAGIC   Path: `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_company`
-# MAGIC - `E2`: Element 2 (`ele2`)  
-# MAGIC   Path: `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el2_element`
-# MAGIC - `E3`: Element 3 (`ele3`)  
-# MAGIC   Path: `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el3_element`
+# MAGIC ## Overview
+# MAGIC
+# MAGIC This notebook Loads the data from multiple sources from S3 and after doing the detailed calculation the final dataset is created and loaded into s3.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## Data Sources
+# MAGIC | Dataset                | Description                                                             | S3 Path                                                                              |
+# MAGIC | ---------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+# MAGIC | **DH (Document Head)** | Header-level details of documents such as document date, currency, etc. | `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_dochead`     |
+# MAGIC | **DL (Document Line)** | Line-level details of transactions within each document.                | `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_docline`     |
+# MAGIC | **C (Company)**        | Contains company-level metadata like home currency, company code, etc.  | `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_company`     |
+# MAGIC | **E2 (Element 2)**     | Second-level financial element reference data.                          | `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el2_element` |
+# MAGIC | **E3 (Element 3)**     | Third-level financial element reference data (customers).               | `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el3_element` |
 # MAGIC
 # MAGIC
-# MAGIC **Decimal Handling:**  
-# MAGIC Decimal values are processed using the helper function `convert_decimal_value` to ensure accuracy in calculations.
+# MAGIC ---
 # MAGIC
-# MAGIC **Business Logic:**  
-# MAGIC Calculations are performed according to the business logic outlined in the following query:  
-# MAGIC [Business Logic Reference](https://thermofisher.sharepoint.com/:t:/s/FinanceDigitalTransformationTeam/Ec_0OAidxsNPnXZpzDrO3ycBn7fwV0ol5rS-uMrKEIMJzQ?e=HVDNbT)
+# MAGIC ## Output
 # MAGIC
-# MAGIC **Output:**  
-# MAGIC The final DataFrame is saved to S3 at:  
+# MAGIC The processed Revenue MDP dataset is stored as a **Delta table** in S3:  
+# MAGIC
 # MAGIC `s3://tfsdl-corp-fdt/test/psg/ctd/cert/revenue_mdp`
 # MAGIC
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC Key  Columns Used :
-# MAGIC | Purpose                           | Columns                                | Description                                                |
-# MAGIC | --------------------------------- | -------------------------------------- | ---------------------------------------------------------- |
-# MAGIC | **Primary joins between DL & DH** | `cmpcode`, `doccode`, `docnum`         | Used as composite keys to link header and line-level data. |
-# MAGIC | **Join with AR lines**            | `cmpcode`, `doccode`, `docnum`         | Used again to attach customer-related `el3`.               |
-# MAGIC | **Join with company table (C)**   | `cmpcode` ↔ `C.code`                   | To bring in home currency and company details.             |
-# MAGIC | **Join with E2 (EL2)**            | `cmpcode`, `el2`                       | Links to element-level 2 info.                             |
-# MAGIC | **Join with E3 (CUS)**            | `cmpcode`, `customer_el3` ↔ `el3_code` | Links to element-level 3 (customer).                       |
-# MAGIC | **Join with job defaults**        | `cmpcode`                              | Used to get default `el4`.                                 |
+# MAGIC ---
+# MAGIC
+# MAGIC ## Key Columns Used
+# MAGIC
+# MAGIC | Purpose | Columns | Description |
+# MAGIC |---------|---------|-------------|
+# MAGIC | **Primary Join (DL ↔ DH)** | `cmpcode`, `doccode`, `docnum` | Links document header and line-level records. |
+# MAGIC | **Join with AR lines** | `cmpcode`, `doccode`, `docnum` | Attaches customer (`el3`) information to document lines. |
+# MAGIC | **Join with Company (C)** | `cmpcode ↔ C.code` | Adds company-level details like home currency. |
+# MAGIC | **Join with Element 2 (E2)** | `cmpcode`, `el2` | Links line items with element-level 2 info. |
+# MAGIC | **Join with Element 3 (E3)** | `cmpcode`, `customer_el3 ↔ el3_code` | Brings customer-level metadata. |
+# MAGIC | **Join with Job Defaults** | `cmpcode` | Retrieves default job number (`el4`) when missing. |
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## Step 1: Import Dependencies
+# MAGIC
+# MAGIC The notebook uses **PySpark** libraries for DataFrame operations, transformations, aggregation, and window functions.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## Step 2: Define Source and Output Paths
+# MAGIC
+# MAGIC All source datasets and output location are defined using S3 paths for later loading. The output path stores the final **Delta table**.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## Step 3: Helper Functions
+# MAGIC
+# MAGIC ### Decimal Handling
+# MAGIC - A helper function ensures accurate decimal calculations across datasets with inconsistent decimal precision.
+# MAGIC - Logic: if decimal places = 0 → use the value as-is; else → scale value by `10^(decimal_places-2)`.
+# MAGIC
+# MAGIC ### Data Loading
+# MAGIC - A loader function reads all source datasets (`DH`, `DL`, `C`, `E2`, `E3`) as Spark DataFrames from S3.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## Step 4: Processing Logic
+# MAGIC
+# MAGIC ### 4.1 Load Source Data
+# MAGIC - Loads datasets either from input arguments or from S3.
+# MAGIC - Ensures all subsequent transformations operate on the correct DataFrames.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### 4.2 Derive AR Lines (Customer Information)
+# MAGIC - Filters **Document Line + Document Head** to create AR lines containing **customer element (`el3`)**.
+# MAGIC - **Filters Applied:**
+# MAGIC   - `el2` starting with `021` or specific company-based inclusion (`28020` for some companies).
+# MAGIC   - Exclude records where `statpay = 665`.
+# MAGIC   - Only include documents dated after **2019-01-01**.
+# MAGIC - Aggregates lines to get **unique customer numbers** per document.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### 4.3 Base Dataset (DL + DH Join)
+# MAGIC - Joins **Document Line** and **Document Head** using `cmpcode`, `doccode`, and `docnum`.
+# MAGIC - Adds computed columns:
+# MAGIC   - **Global Identifier**: Unique key combining company code and document references, standardized for each company.
+# MAGIC   - **Invoice Number**: Extracted based on company-specific rules.
+# MAGIC   - **PO Value**: Purchase order reference extracted from different fields depending on company and date.
+# MAGIC   - **Protocol Value**: Protocol/reference information extracted conditionally per company.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### 4.4 Job Defaults Extraction
+# MAGIC - Uses a **window function** to get the **first valid `el4`** (job number) per company.
+# MAGIC - Provides a **default fallback** for missing `el4` values in later joins.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### 4.5 Excluded Document Codes
+# MAGIC - Certain document types are **excluded** from revenue calculations to avoid duplications or non-revenue entries.  
+# MAGIC - Examples: reversals, receipts, accruals, corrective postings, and special processing documents.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### 4.6 Join with Customer, Company, and Element Data
+# MAGIC - Joins base dataset with:
+# MAGIC   - **AR lines** for customer numbers.
+# MAGIC   - **Company table** for home currency and company info.
+# MAGIC   - **Element 2 table** for financial classification.
+# MAGIC   - **Element 3 table** for customer metadata.
+# MAGIC - Applies filters:
+# MAGIC   - Include specific `el2` patterns relevant for revenue.
+# MAGIC   - Exclude recharge-related entries for specific companies.
+# MAGIC   - Exclude lines where `el4` starts with `X` for selected companies.
+# MAGIC   - Only include documents post **2019-01-01**.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### 4.7 Aggregation
+# MAGIC - Aggregates **financial values** (`valuehome`, `valuedoc`) per combination of:
+# MAGIC   - Company, document, customer, invoice, elements, currency.
+# MAGIC - Applies **decimal normalization** for accurate sums.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### 4.8 Final Column Selection and Mapping
+# MAGIC - Maps `cmpcode` to **SiteID** based on predefined company-to-ID mapping.
+# MAGIC - Fills missing `JobNumber` using **default job numbers** extracted earlier.
+# MAGIC - Selects and renames columns for final output:
+# MAGIC   - `SiteID`, `Company`, `Global Identifier`, `InvoiceDate`, `CustomerNumber`, `CustomerName`, `InvoiceNumber`, `PO`, `Protocol`, `JobNumber`, `ValueHome`, `ValueDoc`, etc.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## Step 5: Write Output
+# MAGIC - Writes the final **PSG Certification Revenue** DataFrame to the defined **Delta table path** in S3.
+# MAGIC - Uses **overwrite mode** to ensure the latest run replaces old data.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ##  Summary
+# MAGIC - The notebook ensures **clean, normalized, and aggregated revenue data** for revenue mdp
+# MAGIC - Handles:
+# MAGIC   - Multi-source joins
+# MAGIC   - Customer and element metadata
+# MAGIC   - Decimal normalization
+# MAGIC   - specific logic for invoice, PO, and protocol values
+# MAGIC   - Default fallback for missing job numbers
+# MAGIC - Provides a **ready-to-use Delta dataset** for financial reporting and analytics.
 # MAGIC
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Imports
+# MAGIC ###  Imports
+# MAGIC
+# MAGIC The following libraries are imported for data processing:
+# MAGIC
+# MAGIC - `SparkSession`: Entry point to Spark functionality.
+# MAGIC - `functions as F`: Provides access to built-in PySpark SQL functions.
+# MAGIC - `Window`: Enables window operations for advanced aggregations.
 
 # COMMAND ----------
 
@@ -56,7 +171,20 @@ from pyspark.sql.window import Window
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Source and output Paths
+# MAGIC ### Source Paths
+# MAGIC
+# MAGIC The following S3 paths are used to load the source datasets:
+# MAGIC
+# MAGIC - **Document Head (DH):**  
+# MAGIC   `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_dochead`
+# MAGIC - **Company (C):**  
+# MAGIC   `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_company`
+# MAGIC - **Document Line (DL):**  
+# MAGIC   `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_docline`
+# MAGIC - **Element 2 (E2):**  
+# MAGIC   `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el2_element`
+# MAGIC - **Element 3 (E3):**  
+# MAGIC   `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el3_element`
 
 # COMMAND ----------
 
@@ -67,14 +195,32 @@ docline = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oa
 ele2 = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el2_element"
 ele3 = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/coda/oas_el3_element"
 
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Output Path
+# MAGIC
+# MAGIC **The final processed Revenue MDP dataset is saved as a Delta table at:**
+# MAGIC
+# MAGIC `s3://tfsdl-corp-fdt/test/psg/ctd/cert/revenue_mdp`
+
+# COMMAND ----------
+
 #Output Path
 revenue_mdp_output= "s3://tfsdl-corp-fdt/test/psg/ctd/cert/revenue_mdp"
-
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Helper Functions
+# MAGIC ## Helper Functions
+# MAGIC  `convert_decimal_value(value_col, dp_col)`
+# MAGIC Converts a value to its correct decimal representation based on the number of decimal places.  
+# MAGIC - If `dp_col` is 0, returns the value as-is.
+# MAGIC - Otherwise, divides the value by 10 to the power of (`dp_col` - 2).
+# MAGIC
+# MAGIC `load_psg_cert_revenue_sources()`
+# MAGIC Loads required Delta tables for PSG Cert Revenue processing.  
+# MAGIC Returns: DataFrames for document header, document line, company, element2, and element3.
 
 # COMMAND ----------
 
@@ -108,10 +254,48 @@ def load_psg_cert_revenue_sources():
 
 # MAGIC %md
 # MAGIC ### Calculations
+# MAGIC
+# MAGIC #### `process_psg_cert_revenue` Function
+# MAGIC
+# MAGIC This function processes and aggregates PSG Certification Revenue data from multiple sources, applying business rules and transformations to produce a clean, ready-to-use dataset.
+# MAGIC
+# MAGIC **Key Steps:**
+# MAGIC
+# MAGIC 1. **Data Loading:**  
+# MAGIC    Loads Document Head, Document Line, Company, Element2, and Element3 datasets if not provided.
+# MAGIC
+# MAGIC 2. **AR Lines Extraction:**  
+# MAGIC    Identifies customer-related document lines (`el3`) based on business filters (e.g., `el2` patterns, status, date).
+# MAGIC
+# MAGIC 3. **Base Dataset Construction:**  
+# MAGIC    Joins Document Line and Document Head, computes key fields:
+# MAGIC    - `global_identifier`: Unique document key
+# MAGIC    - `invoice_number`, `po_value`, `protocol_value`: Extracted per company/date logic
+# MAGIC
+# MAGIC 4. **Job Defaults:**  
+# MAGIC    Determines the default job number (`el4`) per company for fallback.
+# MAGIC
+# MAGIC 5. **Exclusion Logic:**  
+# MAGIC    Excludes specific document codes and lines based on business rules.
+# MAGIC
+# MAGIC 6. **Customer, Company, and Element Joins:**  
+# MAGIC    Enriches the base dataset with customer, company, and element metadata.
+# MAGIC
+# MAGIC 7. **Aggregation:**  
+# MAGIC    Sums financial values (`valuehome`, `valuedoc`) with decimal normalization, grouped by key fields.
+# MAGIC
+# MAGIC 8. **Final Mapping:**  
+# MAGIC    Maps company codes to `SiteID`, fills missing job numbers, and selects/renames output columns.
+# MAGIC
+# MAGIC 9. **Output:**  
+# MAGIC    Returns the final aggregated DataFrame ready for writing to the Delta table.
+# MAGIC
+# MAGIC ---
 
 # COMMAND ----------
 
 # DBTITLE 1,ru
+
 def process_psg_cert_revenue(DH=None, DL=None, C=None, E2=None, E3=None):
     try:
         # Load data 
@@ -348,7 +532,19 @@ def process_psg_cert_revenue(DH=None, DL=None, C=None, E2=None, E3=None):
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Main fucntion
+# MAGIC ### Main Function
+# MAGIC
+# MAGIC This section executes the revenue MDP processing workflow:
+# MAGIC
+# MAGIC 1. **Run Processing:**  
+# MAGIC    Calls `process_psg_cert_revenue()` to generate the final revenue DataFrame.
+# MAGIC
+# MAGIC 2. **Write Output:**  
+# MAGIC    Saves the result as a Delta table to the specified S3 path (`revenue_mdp_output`) in overwrite mode.
+# MAGIC
+# MAGIC 3. **Error Handling:**  
+# MAGIC    - If writing fails, raises a descriptive exception.
+# MAGIC    - If processing fails, raises a descriptive exception.
 
 # COMMAND ----------
 

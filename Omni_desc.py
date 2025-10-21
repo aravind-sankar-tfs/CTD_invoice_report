@@ -1,67 +1,50 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC ### **Notebook Overview**
+# MAGIC # PSG OMNI Description Table
+# MAGIC
+# MAGIC ## Notebook Overview
+# MAGIC
+# MAGIC This notebook processes **finance invoicing data** from Microsoft Fabric and MDM sources to generate the **OMNI Description Table**.  
+# MAGIC
+# MAGIC It combines invoice headers, invoice lines, and client master data to compute required business metrics, map sites, and generate a **ready-to-use Delta table** for reporting and analytics.  
+# MAGIC
+# MAGIC The notebook ensures consistency in column names, handles site mappings, derives global identifiers, and aggregates financial values at the **invoice and site level**.
+# MAGIC
+# MAGIC **Key Steps:**
+# MAGIC 1. Load data sources from Fabric and S3 (MDM).
+# MAGIC 2. Map site IDs to site names and short codes.
+# MAGIC 3. Calculate derived fields based on OMNI business logic.
+# MAGIC 4. Aggregate and transform data.
+# MAGIC 5. Export the final table to S3.
 # MAGIC
 # MAGIC ---
 # MAGIC
-# MAGIC #### **1. Load Data Sources**
-# MAGIC - **Fabric:**  
-# MAGIC   - `df_finance_invoicing_headers`  
-# MAGIC   - `df_finance_invoicing_lines`
-# MAGIC - **Athena:**  
-# MAGIC   - `df_mdm_client_clients`
+# MAGIC ## Data Sources and Paths
 # MAGIC
-# MAGIC ---
+# MAGIC | Source | DataFrame | Description | Path |
+# MAGIC |--------|-----------|-------------|------|
+# MAGIC | Fabric | `df_finance_invoicing_headers` | Invoice and credit note headers | JDBC: `[dbo].[Finance - Invoicing - Invoice and Credit Note Headers]` |
+# MAGIC | Fabric | `df_finance_invoicing_lines` | Invoice and credit note line items | JDBC: `[dbo].[Finance - Invoicing - Invoice and Credit Note Lines]` |
+# MAGIC | S3 / Delta | `df_mdm_client_clients` | Client master data (MDM) | `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/mdm/master_client_data` |
 # MAGIC
-# MAGIC #### **2. Map Site IDs to Site Names**
+# MAGIC **Destination Path:**
+# MAGIC - OMNI Description Table output:  
+# MAGIC `s3://tfsdl-corp-fdt/test/psg/ctd/cert/omni_desc`
 # MAGIC
-# MAGIC <div style="width:100%; overflow-x:auto;">
-# MAGIC <table style="width:100%; table-layout:fixed; border-collapse: collapse; text-align:left;">
-# MAGIC   <thead>
-# MAGIC     <tr style="background-color:#f2f2f2;">
-# MAGIC       <th style="padding:8px; width:15%;">SiteID</th>
-# MAGIC       <th style="padding:8px; width:85%;">Site</th>
-# MAGIC     </tr>
-# MAGIC   </thead>
-# MAGIC   <tbody>
-# MAGIC     <tr><td style="padding:8px;">3</td><td style="padding:8px;">Singapore</td></tr>
-# MAGIC     <tr><td style="padding:8px;">2</td><td style="padding:8px;">Horsham</td></tr>
-# MAGIC     <tr><td style="padding:8px;">31</td><td style="padding:8px;">China - Suzhou</td></tr>
-# MAGIC     <tr><td style="padding:8px;">4</td><td style="padding:8px;">Mount Prospect</td></tr>
-# MAGIC     <tr><td style="padding:8px;">15</td><td style="padding:8px;">Japan</td></tr>
-# MAGIC     <tr><td style="padding:8px;">11</td><td style="padding:8px;">Mexico - FCS Mexico City</td></tr>
-# MAGIC     <tr><td style="padding:8px;">33</td><td style="padding:8px;">South Korea</td></tr>
-# MAGIC     <tr><td style="padding:8px;">18</td><td style="padding:8px;">Colombia - FCS Bogota</td></tr>
-# MAGIC     <tr><td style="padding:8px;">38</td><td style="padding:8px;">Hegenheimer</td></tr>
-# MAGIC     <tr><td style="padding:8px;">0</td><td style="padding:8px;">Allentown</td></tr>
-# MAGIC     <tr><td style="padding:8px;">7</td><td style="padding:8px;">China - Beijing</td></tr>
-# MAGIC     <tr><td style="padding:8px;">17</td><td style="padding:8px;">Peru - FCS Lima</td></tr>
-# MAGIC     <tr><td style="padding:8px;">16</td><td style="padding:8px;">Chile - FCS Santiago</td></tr>
-# MAGIC     <tr><td style="padding:8px;">1</td><td style="padding:8px;">Basel</td></tr>
-# MAGIC     <tr><td style="padding:8px;">12</td><td style="padding:8px;">Argentina - FCS Buenos Aires</td></tr>
-# MAGIC     <tr><td style="padding:8px;">9</td><td style="padding:8px;">Brazil - FCS Sao Paulo</td></tr>
-# MAGIC   </tbody>
-# MAGIC </table>
-# MAGIC </div>
-# MAGIC
-# MAGIC ---
-# MAGIC
-# MAGIC #### **3. Calculate Required Columns for OMNI Description Table**
-# MAGIC - Apply business logic to compute required fields based on the ([OMNI Desc SQL](https://thermofisher.sharepoint.com/:t:/s/FinanceDigitalTransformationTeam/EXTJG0BKPj5LuXn9cEp8N4MBkQWL2Z9P23A2UV7pZiUSBQ?e=p0DJUd)).
-# MAGIC
-# MAGIC ---
-# MAGIC
-# MAGIC #### **4. Export Final DataFrame**
-# MAGIC - Save `df_omni_desc` to S3 at the specified path:  
-# MAGIC   `s3://tfsdl-corp-fdt/test/psg/ctd/cert/omni_desc`
-# MAGIC
-# MAGIC ---
+# MAGIC ##  Summary
+# MAGIC - Combines Fabric invoice data and MDM client master data.
+# MAGIC - Maps **sites and SiteIDs** for consistent reporting.
+# MAGIC - Computes **derived columns** like global identifiers and formatted invoice dates.
+# MAGIC - Aggregates financial values and quantities.
+# MAGIC - Produces a clean, ready-to-use **Delta OMNI Description table** for downstream analytics.
 # MAGIC
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ### Imports
+# MAGIC - Import PySpark functions, exceptions, regex, and utility modules.
+# MAGIC - Required for data manipulation, joins, aggregation, and error handling.
 
 # COMMAND ----------
 
@@ -74,13 +57,13 @@ from itertools import chain
 
 # MAGIC %md
 # MAGIC ### Credentials
+# MAGIC - Connects to **Microsoft Fabric Datawarehouse** via Azure Active Directory authentication.
+# MAGIC - JDBC URL and connection properties are configured for `Finance - Invoicing` tables.
 
 # COMMAND ----------
 
 # Connect to Microsoft Fabric Datawarehouse using Azure Active Directory authentication
 jdbc_url = "jdbc:sqlserver://fvzh3nukvj3upilj5pvxu2r3m4-dhobibgnitienogvfhocprazui.datawarehouse.fabric.microsoft.com:1433;database=GDS - Warehouse"
-# jdbc_url = "jdbc:sqlserver://fvzh3nukvj3upilj5pvxu2r3m4-3g7rhhmom6oefcs3o5op3kikom.datawarehouse.fabric.microsoft.com:1433;database=GDS - Warehouse"
-
 
 connection_properties = {
     "authentication": "ActiveDirectoryPassword",
@@ -88,6 +71,23 @@ connection_properties = {
     "password": "Njiyy22bufe3nf2f!oya#8E23sYe",
     "driver": "com.microsoft.sqlserver.jdbc.SQLServerDriver"
 }
+
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC **MDM Data source**
+# MAGIC
+# MAGIC - **Variable**: mdm
+# MAGIC - S3 Path: `s3://psg-mydata-production-euw1-raw/restricted/operations/erp/mdm/master_client_data`
+# MAGIC
+# MAGIC **Omni Table Output**
+# MAGIC
+# MAGIC - Variable: **omni_table_output**
+# MAGIC - S3 Path: `s3://tfsdl-corp-fdt/test/psg/ctd/cert/omni_table`
+
+# COMMAND ----------
 
 # athena data source
 mdm = "s3://psg-mydata-production-euw1-raw/restricted/operations/erp/mdm/master_client_data"
@@ -97,7 +97,12 @@ omni_desc_output ="s3://tfsdl-corp-fdt/test/psg/ctd/cert/omni_desc"
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Load Headers and line items from fabric
+# MAGIC ### Load Data from Fabric
+# MAGIC - Load invoice headers and lines via **JDBC**.
+# MAGIC - Catch PySpark exceptions and provide descriptive error messages.
+# MAGIC **Tables:**
+# MAGIC - `dbo.Finance - Invoicing - Invoice and Credit Note Headers`
+# MAGIC - `dbo.Finance - Invoicing - Invoice and Creadit Note Lines`
 
 # COMMAND ----------
 
@@ -120,7 +125,10 @@ except PySparkException as ex:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Load MDM Client data from athena
+# MAGIC ### Load Data from S3 (MDM)
+# MAGIC - Load client master data as Delta table.
+# MAGIC - Catch PySpark exceptions for error handling.
+# MAGIC - Delta Path for MDM:`s3://psg-mydata-production-euw1-raw/restricted/operations/erp/mdm/master_client_data`
 
 # COMMAND ----------
 
@@ -132,7 +140,13 @@ except PySparkException as ex:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Mapping Site ID's
+# MAGIC ### Mapping Site IDs
+# MAGIC -  **facility-to-site mapping**: maps `Facility` → `(Site Short Code, SiteID)`.
+# MAGIC - Create mappings for:
+# MAGIC   - Full name → struct(Site, SiteID)
+# MAGIC   - Shortcode → struct(Site, SiteID)
+# MAGIC   - Shortcode → SiteID
+# MAGIC - Handles fallback scenarios for unmapped or numeric facilities.
 
 # COMMAND ----------
 
@@ -185,7 +199,27 @@ map_shortcode_to_id = F.create_map(
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Calculations
+# MAGIC ### Calculations for OMNI Description Table
+# MAGIC
+# MAGIC 1. Filter invoice headers for **Invoice Date >= 2019-01-01**.
+# MAGIC 2. Join **invoice headers (`ih`)** with **invoice lines (`il`)** using `Global Identifier`.
+# MAGIC 3. Left join with **MDM client data (`mc`)** to attach client information.
+# MAGIC 4. Clean and uppercase `Facility` and `Business Unit` for consistent mapping.
+# MAGIC 5. Map **Site** and **SiteID** using multiple mapping expressions with priority:
+# MAGIC    - Full facility name
+# MAGIC    - Shortcode
+# MAGIC    - Business Unit shortcode
+# MAGIC    - Numeric fallback
+# MAGIC    - Unknown (`-1`)
+# MAGIC 6. Derive additional columns:
+# MAGIC    - `InvoiceDate_formatted`: formatted invoice date.
+# MAGIC    - `GLCode_upper`: uppercased GL Code.
+# MAGIC    - `key_global_identifier`: concatenation of SiteID, Invoice Number, and GL Code.
+# MAGIC 7. Aggregate at **Site + Invoice + GL + Record Type** level:
+# MAGIC    - Sum `NetValue` and `Quantity`.
+# MAGIC 8. Select and rename final columns for the output table.
+# MAGIC 9. Order data by `SiteID`, `InvoiceDate`, and `InvoiceNumber`.
+# MAGIC
 
 # COMMAND ----------
 
@@ -289,6 +323,9 @@ except Exception as e:
 
 # MAGIC %md
 # MAGIC ### Write to s3
+# MAGIC - Write **OMNI Description Table** as **Delta table** to S3.
+# MAGIC - Use `overwrite` mode to refresh the dataset on every run.
+# MAGIC - Catch exceptions and raise error messages if write fails.
 
 # COMMAND ----------
 
