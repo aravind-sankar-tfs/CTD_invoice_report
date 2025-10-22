@@ -296,6 +296,7 @@ arlines_df = (
     )
     .filter(F.col("DL.statpay") != 665)
     .filter(F.col("DH.docdate") >= F.lit("2019-01-01"))
+    .filter(F.col("DH.cdc_operation_type") != 'D') 
     .select("DL.cmpcode", "DL.doccode", "DL.docnum", "DL.el3")
 )
 

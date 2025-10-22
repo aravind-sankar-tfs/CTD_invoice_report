@@ -89,7 +89,7 @@ oas_docline_df = (
 )
 
 # Load dochead data and select key columns
-oas_dochead_df = spark.read.format("delta").load(oas_dochead_str).select("cmpcode","doccode","docdate","docnum")
+oas_dochead_df = spark.read.format("delta").load(oas_dochead_str).select("cmpcode","doccode","docdate","docnum", "cdc_operation_type")
 
 # Load ompany data and select company code
 oas_company_df = spark.read.format("delta").load(oas_company_str).select("code")
@@ -210,6 +210,7 @@ final_df = (
         ) &
         (F.col("DL.statpay") != 665) &
         (F.col("DH.docdate") >= F.lit("2019-01-01")) &
+        (F.col("DH.cdc_operation_type") != 'D') &
         (~F.col("DH.doccode").isin(
             'DISPERSE', 'MATCHING', 'PCANCEL', 'PINV', 'PINVDBT', 'RECEIPTS',
             'Y/E-PROC-BS', 'CPAY', 'CREC', 'OBAL', 'PCRN', 'REVAL', 'REVALR',
