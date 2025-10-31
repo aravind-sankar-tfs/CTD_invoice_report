@@ -168,13 +168,22 @@ except PySparkException as ex:
 #Define Facility -> (Site Short Code, SiteID) mapping
 facility_to_siteinfo = {
     'Basel': ('BAS', 1),
-    'China - Beijing': ('CHINA', 7),
+    'China - Beijing': ('BEIJING', 7),
     'China - Suzhou': ('SUZHOU', 31),
-    'Hegenheimer': ('HEG', 38),
+    'Hegenheimer': ('HEGENHEIMER', 38),
     'Horsham': ('MAI', 2),
-    'Mount Prospect': ('MP', 4)
+    'Mount Prospect': ('MP', 4),
+    'Japan': ('TOKYO', 15),
+    'Mexico - FCS Mexico City': ('MEXICO', 11),
+    'South Korea': ('SEOUL', 33),
+    'Colombia - FCS Bogota': ('COLOMBIA', 18),
+    'Allentown': ('ALLENTOWN', 0),
+    'Singapore': ('SINGAPORE', 3),
+    'Peru - FCS Lima': ('PERU', 17),
+    'Chile - FCS Santiago': ('CHILE', 16),
+    'Argentina - FCS Buenos Aires': ('ARGENTINA', 12),
+    'Brazil - FCS Sao Paulo': ('BRAZIL', 9)
 }
-
 # Convert mapping to PySpark create_map expression
 mapping_expr = F.create_map(
     *list(chain.from_iterable(
@@ -236,6 +245,7 @@ try:
             F.upper(
                 F.trim(
                     F.concat(
+                        F.trim(F.col("SiteID").cast("string")),
                         F.trim(F.col("il.`Invoice Number`")),
                         F.trim(F.col("il.`GL Code`"))
                     )
